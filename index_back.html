@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+   <head>
+      <meta charset="utf-8">
+      <title>Vcalo Geometry Display</title>
+      <style>
+        /* 设置 body 和 html 高度 */
+        html, body {
+          margin: 0;
+          padding: 0;
+          width: 100%;
+          height: 100%;
+        }
+
+        /* 设置按钮栏 */
+        #controls {
+          position: absolute;
+          top: 0;
+          width: 100%;
+          z-index: 10;
+          background-color: rgba(255, 255, 255, 0.9);
+          padding: 10px;
+        }
+
+        /* 设置绘图区域占满剩余空间 */
+        #drawing {
+          position: absolute;
+          top: 50px; /* 与按钮栏的高度匹配 */
+          width: 100%;
+          bottom: 0;
+        }
+
+        /* Loading overlay */
+        #loadingOverlay {
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background-color: rgba(255, 255, 255, 0.8);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 1.5em;
+          color: #333;
+          z-index: 20;
+          visibility: hidden;
+        }
+
+        /* Simple spinner animation */
+        .spinner {
+          border: 5px solid #f3f3f3;
+          border-top: 5px solid #3498db;
+          border-radius: 50%;
+          width: 40px;
+          height: 40px;
+          animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      </style>
+   </head>
+
+   <body>
+     <div id="controls">
+       <button onclick="window.loadGeometry('Shield.json')">Load Shield.json</button>
+       <button onclick="window.loadGeometry('Crystal.json')">Load Crystal.json</button>
+       <button onclick="window.loadGeometry('Single_Crystal.json')">Load Single_Crystal.json</button>
+       <button onclick="window.loadGeometry('vcalo.json')">Load vcalo.json</button>
+       <button onclick="window.loadGeometry('Converter.json')">Load Converter.json</button>
+       <button onclick="window.loadGeometry('Converter_ECAL.json')">Load Converter_ECAL.json</button>
+     </div>
+     <div id="drawing"></div>
+
+     <!-- Loading overlay with spinner -->
+     <div id="loadingOverlay">
+       <div class="spinner"></div>
+       <div style="margin-left: 10px;">Loading...</div>
+     </div>
+   </body>
+
+   <script type='module'>
+      import { httpRequest, openFile, draw } from 'https://root.cern/js/latest/modules/main.mjs';
+
+      // Function to show or hide loading overlay
+      function showLoading(isLoading) {
+          const overlay = document.getElementById('loadingOverlay');
+          overlay.style.visibility = isLoading ? 'visible' : 'hidden';
+      }
+
+      // Function to load and draw geometry
+      async function loadGeometry(geom_file) {
+          // Show loading overlay
+          showLoading(true);
+
+          // Clear the previous drawing by clearing the innerHTML of the #drawing div
+          document.getElementById('drawing').innerHTML = '';
+          
+          try {
+              // Load the new geometry and draw it
+              let obj = await httpRequest(geom_file, 'object');
+              let tracks_file = 'tracks.root';
+              let geo_painter = await draw('drawing', obj);
+              let file = await openFile(tracks_file);
+              let tracks = await file.readObject('tracks');
+              geo_painter.drawExtras(tracks, 'tracks');
+          } finally {
+              // Hide loading overlay when done
+              showLoading(false);
+          }
+      }
+
+      // Expose the function to the global scope
+      window.loadGeometry = loadGeometry;
+   </script>
+</html>
+

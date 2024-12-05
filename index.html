@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Vcalo Geometry Display</title>
+    <style>
+        /* 设置 body 和 html 高度 */
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* 设置按钮栏 */
+        #controls {
+            position: absolute;
+            top: 0;
+            width: 100%;
+            z-index: 10;
+            background-color: rgba(255, 255, 255, 0.9);
+            padding: 10px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        /* 设置绘图区域占满剩余空间 */
+        #drawing {
+            position: absolute;
+            top: 80px; /* 与按钮栏的高度匹配 */
+            width: 100%;
+            bottom: 0;
+        }
+
+        /* Loading overlay */
+        #loadingOverlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(255, 255, 255, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5em;
+            color: #333;
+            z-index: 20;
+            visibility: hidden;
+        }
+
+        /* Simple spinner animation */
+        .spinner {
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #3498db;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        /* 设置事件信息显示 */
+        #eventInfo {
+            position: absolute;
+            top: 60px;
+            left: 10px;
+            z-index: 10;
+            background-color: rgba(255, 255, 255, 0.9);
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 1em;
+        }
+        #energyInfo {
+            position: absolute;
+            top: 100px;
+            left: 10px;
+            z-index: 10;
+            background-color: rgba(255, 255, 255, 0.9);
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 1em;
+        }
+    </style>
+</head>
+
+<body>
+<div id="controls">
+    <button onclick="window.loadGeometry('Shield.json')">Load Shield.json</button>
+    <button onclick="window.loadGeometry('Crystal.json')">Load Crystal.json</button>
+    <button onclick="window.loadGeometry('Single_Crystal.json')">Load Single_Crystal.json</button>
+    <button onclick="window.loadGeometry('vcalo.json')">Load vcalo.json</button>
+    <button onclick="window.loadGeometry('Converter.json')">Load Converter.json</button>
+    <button onclick="window.loadGeometry('Converter_ECAL.json')">Load Converter_ECAL.json</button>
+    <button onclick="window.loadGeometry('Tracker.json')">Load Tracker.json</button>
+    <button id="prevEvent" disabled>Previous Event</button>
+    <button id="nextEvent" disabled>Next Event</button>
+</div>
+<div id="drawing"></div>
+<div id="eventInfo">Event: 0</div>
+<div id="energyInfo">Gamma Energy: 0</div>
+
+<!-- Loading overlay with spinner -->
+<div id="loadingOverlay">
+    <div class="spinner"></div>
+    <div style="margin-left: 10px;">Loading...</div>
+</div>
+
+</body>
+
+<script type='module'>
+    // 导入整个 JSROOT 命名空间
+    import * as JSROOT from 'https://root.cern/js/latest/modules/main.mjs';
+    import { TSelector, treeProcess } from 'https://root.cern/js/latest/modules/tree.mjs';
+
+    // Function to show or hide loading overlay
+    function showLoading(isLoading) {
+        const overlay = document.getElementById('loadingOverlay');
+        overlay.style.visibility = isLoading ? 'visible' : 'hidden';
+    }
+
+    // 全局变量
+    let geo_painter = null;
+    let tree = null;
+    let nentries = 0;
+    let currentEventIndex = -1;
+
+    // 禁用/启用事件导航按钮
+    function setEventButtonsEnabled(enabled) {
+        document.getElementById('prevEvent').disabled = !enabled;
+        document.getElementById('nextEvent').disabled = !enabled;
+    }
+
+    // 初始化 Tracks（读取 ROOT 文件和树）
+    let myTracks = [];
+    let cnt = 0;
+    let gammaEnergy = [];
+    async function initializeTracks() {
+        const tracks_file = 'tracks.root';
+        const treeName = 'vtree'; // 替换为你的树名称
+        const branchName = 'tracks'; // 替换为你的分支名称
+	let selector = new TSelector();
+	selector.addBranch("tracks");
+	selector.addBranch("init_E");
+	selector.Begin = function() {
+	}
+	selector.Process = function() {
+		myTracks.push(this.tgtobj.tracks);
+		gammaEnergy.push(this.tgtobj.init_E);
+		cnt++;
+	}
+	selector.Terminate = function(res) {
+		if (!res || (cnt === 0)) return;
+	}
+
+        try {
+            // 打开 ROOT 文件
+            const track_file = await JSROOT.openFile(tracks_file);
+            // 读取 TTree
+            tree = await track_file.readObject(treeName);
+
+            if (!tree) {
+                throw new Error(`无法在文件中找到树 '${treeName}'`);
+            }
+
+            // 获取总条目数
+            nentries = tree.fEntries;
+            console.log(`Loaded ${nentries} entries from '${treeName}'.`);
+
+            await treeProcess(tree, selector);
+            // 启用事件导航按钮
+            setEventButtonsEnabled(true);
+        } catch (error) {
+            console.error("Error initializing tracks:", error);
+            alert("Error initializing tracks. Please check the console for details.");
+            setEventButtonsEnabled(false);
+        }
+    }
+
+    // 加载并绘制几何
+    async function loadGeometry(geom_file) {
+        showLoading(true);
+
+        // 清除之前的绘图和事件信息
+        document.getElementById('drawing').innerHTML = '';
+        document.getElementById('eventInfo').innerText = 'Event: 0';
+        document.getElementById('energyInfo').innerText = 'Gamma Energy: 0';
+
+        try {
+            // 加载几何数据
+            const obj = await JSROOT.httpRequest(geom_file, 'object');
+            geo_painter = await JSROOT.draw('drawing', obj);
+
+            // 重置当前事件索引
+            currentEventIndex = 0;
+
+        } catch (error) {
+            console.error("Error loading geometry:", error);
+            alert("Error loading geometry. Please check the console for details.");
+        } finally {
+            showLoading(false);
+        }
+        drawEvent(0);
+    }
+
+    // 绘制特定事件
+    async function drawEvent(index) {
+        if (!geo_painter) {
+            console.warn("Geometry not loaded yet.");
+            return;
+        }
+        if (!myTracks) {
+            console.warn("Tracks not initialized.");
+            return;
+        }
+        if (index < 0 || index >= nentries) {
+            console.warn("Index out of bounds:", index);
+            return;
+        }
+
+        showLoading(true);
+
+        try {
+            // 访问 'tracks' 分支
+            const tlist = myTracks[index]; // 确保 'tracks' 是正确的分支名称
+	    const energy = gammaEnergy[index];
+
+            if (!tlist) {
+                throw new Error(`分支 'tracks' 在条目 ${index} 中不存在或为空`);
+            }
+
+            // 清除之前的轨迹
+            geo_painter.clearExtras();
+
+            // 绘制新的轨迹
+            geo_painter.drawExtras(tlist, 'tracks');
+
+            // 更新事件信息显示
+            document.getElementById('eventInfo').innerText = 'Event: ' + index;
+            document.getElementById('energyInfo').innerText = 'Gamma Energy: ' + energy;
+        } catch (error) {
+            console.error("Error drawing event:", error);
+            alert("Error drawing event. Please check the console for details.");
+        } finally {
+            showLoading(false);
+        }
+    }
+
+    // 事件导航按钮的点击处理
+    document.getElementById('prevEvent').onclick = function () {
+        if (currentEventIndex > 0) {
+            currentEventIndex--;
+            drawEvent(currentEventIndex);
+        }
+    };
+
+    document.getElementById('nextEvent').onclick = function () {
+        if (currentEventIndex < nentries - 1) {
+            currentEventIndex++;
+            drawEvent(currentEventIndex);
+        }
+    };
+
+    // 将 loadGeometry 函数暴露到全局作用域，以便按钮可以调用
+    window.loadGeometry = loadGeometry;
+
+    // 初始化 Tracks
+    initializeTracks();
+</script>
+</html>
+
